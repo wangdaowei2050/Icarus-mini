@@ -5,6 +5,9 @@ from pydantic import BaseModel
 from app.services.llm_service import chat_with_llm
 from app.db.session import SessionLocal
 from app.db.models import Message as MessageModel
+from app.repositories.message_repository import save_message, get_messages_by_conversation
+
+from app.schemas.chat import ChatMessage
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -13,40 +16,55 @@ class Message(BaseModel):
     content: str
 
 class ChatRequest(BaseModel):
-    messages: list[Message]
+    conversation_id: int
+    message: str
     model: str
 
 @router.post("/chat")
 def chat(request: ChatRequest):
 
-    latest_user_message = request.messages[-1]
-
-    db = SessionLocal()
-
-    try:
-        user_message = MessageModel(
-            role=latest_user_message.role, 
-            content=latest_user_message.content
-            )
-        db.add(user_message)
-        db.commit()
-    finally:
-        db.close()
-
     def stream_and_save():
-        assistant_reply=""
 
-        for chunk in chat_with_llm(request.messages, request.model):
-            assistant_reply += chunk
-            yield chunk
+        assistant_reply=""
         db = SessionLocal()
+        
         try:
-            assistant_message = MessageModel(
+            history_messages = get_messages_by_conversation(db, request.conversation_id)
+
+            save_message(
+                db=db,
+                conversation_id=request.conversation_id,
+                role="user",
+                content=request.message
+            )
+
+            messages_for_llm = []
+            for message in history_messages:
+                messages_for_llm.append(
+                    ChatMessage(
+                        role=message.role,
+                        content=message.content
+                    )
+                )
+
+            messages_for_llm.append(
+                    ChatMessage(
+                        role="user",
+                        content=request.message
+                    )
+            )
+
+            for chunk in chat_with_llm(messages_for_llm, request.model):
+                assistant_reply += chunk
+                yield chunk
+
+            save_message(
+                db=db,
+                conversation_id=request.conversation_id,
                 role="assistant",
                 content=assistant_reply
             )
-            db.add(assistant_message)
-            db.commit()
+        
         finally:
             db.close()
 

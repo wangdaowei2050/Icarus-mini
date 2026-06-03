@@ -12,10 +12,10 @@ def chat_with_llm(messages: list, model: str) -> Generator[str, None, None]:
         }
     ]
 
-    for msg in messages:
+    for message in messages:
         formatted_messages.append({
-            "role": msg.role,
-            "content": msg.content,
+            "role": message.role,
+            "content": message.content,
         })
     
     return runtime.invoke(
