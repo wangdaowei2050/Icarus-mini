@@ -22,6 +22,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [model, setModel] = useState("qwen3.7-max");
   const [streaming, setStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,7 +39,7 @@ export default function App() {
     setConversations(data.reverse());
   }
 
-  async function createConversation() {
+  async function createConversation(): Promise<Conversation> {
     const res = await fetch(`${API_BASE}/api/conversations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -48,43 +49,70 @@ export default function App() {
     setConversations((prev) => [data, ...prev]);
     setActiveId(data.id);
     setMessages([]);
+    return data;
+  }
+
+  async function deleteConversation(id: number, e: React.MouseEvent) {
+    e.stopPropagation();
+    await fetch(`${API_BASE}/api/conversations/${id}`, { method: "DELETE" });
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (activeId === id) {
+      setActiveId(null);
+      setMessages([]);
+    }
   }
 
   async function loadConversation(id: number) {
     setActiveId(id);
+    setError(null);
     const res = await fetch(`${API_BASE}/api/conversations/${id}`);
     const data = await res.json();
     setMessages(data.messages ?? []);
   }
 
   async function sendMessage() {
-    if (!input.trim() || streaming || activeId === null) return;
+    if (!input.trim() || streaming) return;
+
+    let conversationId = activeId;
+    if (conversationId === null) {
+      const conv = await createConversation();
+      conversationId = conv.id;
+    }
 
     const userMsg: Message = { role: "user", content: input.trim() };
     setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "" }]);
     setInput("");
     setStreaming(true);
+    setError(null);
 
-    const res = await fetch(`${API_BASE}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: activeId, message: userMsg.content, model }),
-    });
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation_id: conversationId, message: userMsg.content, model }),
+      });
 
-    const reader = res.body?.getReader();
-    const decoder = new TextDecoder();
-    let reply = "";
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    if (reader) {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        reply += decoder.decode(value, { stream: true });
-        setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: reply }]);
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let reply = "";
+
+      if (reader) {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          reply += decoder.decode(value, { stream: true });
+          setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: reply }]);
+        }
       }
+    } catch {
+      setMessages((prev) => prev.slice(0, -1));
+      setError("请求失败，请检查后端服务或 API Key。");
+    } finally {
+      setStreaming(false);
+      fetchConversations();
     }
-
-    setStreaming(false);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -106,13 +134,20 @@ export default function App() {
 
         <nav className="conv-list">
           {conversations.map((c) => (
-            <button
+            <div
               key={c.id}
               className={`conv-item${activeId === c.id ? " active" : ""}`}
               onClick={() => loadConversation(c.id)}
             >
-              {c.title}
-            </button>
+              <span className="conv-title">{c.title}</span>
+              <button
+                className="btn-delete"
+                onClick={(e) => deleteConversation(c.id, e)}
+                title="删除会话"
+              >
+                ×
+              </button>
+            </div>
           ))}
         </nav>
       </aside>
@@ -128,10 +163,7 @@ export default function App() {
             </div>
           ) : (
             messages.map((msg, i) => (
-              <div
-                key={i}
-                className={`msg-row ${msg.role}`}
-              >
+              <div key={i} className={`msg-row ${msg.role}`}>
                 <div className={`bubble ${msg.role}`}>
                   {msg.content ||
                     (streaming && i === messages.length - 1 ? "▋" : "")}
@@ -141,6 +173,14 @@ export default function App() {
           )}
           <div ref={bottomRef} />
         </div>
+
+        {/* Error banner */}
+        {error && (
+          <div className="error-banner">
+            <span>{error}</span>
+            <button className="error-close" onClick={() => setError(null)}>×</button>
+          </div>
+        )}
 
         {/* Input */}
         <div className="input-area">
@@ -156,7 +196,7 @@ export default function App() {
             <button
               className="btn-send"
               onClick={sendMessage}
-              disabled={streaming || !input.trim() || activeId === null}
+              disabled={streaming || !input.trim()}
             >
               发送
             </button>
@@ -221,17 +261,15 @@ export default function App() {
           gap: 2px;
         }
         .conv-item {
-          background: transparent;
+          display: flex;
+          align-items: center;
+          gap: 4px;
           border: 1px solid transparent;
           border-radius: 8px;
-          padding: 8px 10px;
+          padding: 8px 6px 8px 10px;
           font-size: 13px;
           color: var(--text);
           cursor: pointer;
-          text-align: left;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
           transition: background 0.12s, border-color 0.12s;
         }
         .conv-item:hover {
@@ -242,6 +280,27 @@ export default function App() {
           border-color: var(--accent-border);
           color: var(--text-h);
         }
+        .conv-title {
+          flex: 1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .btn-delete {
+          flex-shrink: 0;
+          background: none;
+          border: none;
+          color: var(--text);
+          font-size: 15px;
+          line-height: 1;
+          padding: 2px 4px;
+          border-radius: 4px;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.12s, background 0.12s;
+        }
+        .conv-item:hover .btn-delete { opacity: 0.6; }
+        .btn-delete:hover { opacity: 1 !important; background: var(--accent-bg); }
 
         /* ── Chat main ── */
         .chat-main {
@@ -271,10 +330,8 @@ export default function App() {
         }
         .empty-icon { font-size: 28px; }
 
-        .msg-row {
-          display: flex;
-        }
-        .msg-row.user  { justify-content: flex-end; }
+        .msg-row { display: flex; }
+        .msg-row.user      { justify-content: flex-end; }
         .msg-row.assistant { justify-content: flex-start; }
 
         .bubble {
@@ -296,6 +353,32 @@ export default function App() {
           color: var(--text-h);
           border-bottom-left-radius: 4px;
         }
+
+        /* ── Error banner ── */
+        .error-banner {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin: 0 24px 4px;
+          padding: 10px 14px;
+          background: rgba(239, 68, 68, 0.1);
+          border: 1px solid rgba(239, 68, 68, 0.35);
+          border-radius: 10px;
+          font-size: 13px;
+          color: #ef4444;
+        }
+        .error-close {
+          background: none;
+          border: none;
+          color: #ef4444;
+          font-size: 16px;
+          cursor: pointer;
+          padding: 0 2px;
+          line-height: 1;
+          opacity: 0.7;
+        }
+        .error-close:hover { opacity: 1; }
 
         /* ── Input area ── */
         .input-area {
@@ -338,10 +421,7 @@ export default function App() {
           transition: opacity 0.15s;
           white-space: nowrap;
         }
-        .btn-send:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
-        }
+        .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
         .btn-send:not(:disabled):hover { opacity: 0.88; }
 
         .toolbar {

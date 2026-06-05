@@ -1,8 +1,9 @@
 from fastapi import APIRouter
+from fastapi import HTTPException
 from pydantic import BaseModel
 
 from app.db.session import SessionLocal
-from app.repositories.conversation_repository import create_conversation, get_conversations, get_conversation
+from app.repositories.conversation_repository import create_conversation, get_conversations, get_conversation, delete_conversation
 
 from app.repositories.message_repository import get_messages_by_conversation
 
@@ -49,7 +50,7 @@ def get_conversation_detail(conversation_id: int):
         conversation = get_conversation(db, conversation_id)
 
         if conversation is None:
-            return {"error": "Conversation not found"}
+            raise HTTPException(status_code=404, detail="Conversation not found")
         
         messages = get_messages_by_conversation(db, conversation_id)
 
@@ -67,6 +68,17 @@ def get_conversation_detail(conversation_id: int):
                 for message in messages
             ]
         }
+    finally:
+        db.close()
+
+@router.delete("/{conversation_id}")
+def delete(conversation_id: int):
+    db = SessionLocal()
+    try:
+        conversation = delete_conversation(db, conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": "Conversation deleted"}
     finally:
         db.close()
     

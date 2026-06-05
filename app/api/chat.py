@@ -6,8 +6,11 @@ from app.services.llm_service import chat_with_llm
 from app.db.session import SessionLocal
 from app.db.models import Message as MessageModel
 from app.repositories.message_repository import save_message, get_messages_by_conversation
+from app.repositories.conversation_repository import get_conversation, update_conversation_title
+
 
 from app.schemas.chat import ChatMessage
+from app.agent.agent_runtime import run_agent
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -38,6 +41,10 @@ def chat(request: ChatRequest):
                 content=request.message
             )
 
+            conversation = get_conversation(db, request.conversation_id)
+            if conversation and conversation.title == "新会话":
+                update_conversation_title(db, request.conversation_id, request.message.strip()[:20])
+
             messages_for_llm = []
             for message in history_messages:
                 messages_for_llm.append(
@@ -54,7 +61,7 @@ def chat(request: ChatRequest):
                     )
             )
 
-            for chunk in chat_with_llm(messages_for_llm, request.model):
+            for chunk in run_agent(messages_for_llm, request.model):
                 assistant_reply += chunk
                 yield chunk
 
