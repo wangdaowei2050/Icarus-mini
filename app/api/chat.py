@@ -10,7 +10,7 @@ from app.repositories.conversation_repository import get_conversation, update_co
 
 
 from app.schemas.chat import ChatMessage
-from app.agent.agent_runtime import run_agent
+from app.core.agent.runtime import run_agent
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -61,7 +61,7 @@ def chat(request: ChatRequest):
                     )
             )
 
-            for chunk in run_agent(messages_for_llm, request.model):
+            for chunk in run_agent(messages_for_llm, request.model, request.conversation_id):
                 assistant_reply += chunk
                 yield chunk
 
